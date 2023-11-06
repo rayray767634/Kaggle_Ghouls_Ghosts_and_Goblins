@@ -85,3 +85,61 @@ ggg_nb_predictions <- predict(final_wf_nb,
   rename(type=.pred_class) #rename pred1 to type (for submission to Kaggle)
 
 vroom_write(x=ggg_nb_predictions, file="./GGGNBPreds.csv", delim=",")
+
+
+# Neural Networks
+
+nn_recipe <- recipe(type~bone_length + rotting_flesh + hair_length + has_soul + color + id,data = ggg.train ) %>%
+  update_role(id, new_role = "id") %>%
+  step_mutate_at(color, fn = factor) %>%
+  step_dummy(color) %>%
+  step_range(all_numeric_predictors(), min = 0, max = 1) # scale to [0,1]
+
+nn_model <- mlp(hidden_units = tune(),
+                epochs = 100) %>%
+  set_engine("nnet") %>%
+  set_mode("classification")
+
+nn_wf <- workflow() %>%
+  add_recipe(nn_recipe) %>%
+  add_model(nn_model)
+
+nn_tuneGrid <- grid_regular(hidden_units(range=c(1,200)),
+                            levels = 10)
+folds <- vfold_cv(ggg.train, v = 5, repeats = 1)
+
+tuned_nn <- nn_wf %>%
+  tune_grid(resamples = folds,
+            grid = nn_tuneGrid,
+            metrics = metric_set(accuracy))
+
+tuned_nn %>% collect_metrics() %>%
+  filter(.metric =="accuracy") %>%
+  ggplot(aes(x=hidden_units,y=mean)) + geom_line()
+
+CV_results_nn <-nn_wf  %>%
+  tune_grid(resamples = folds,
+            grid = nn_tuneGrid,
+            metrics = metric_set(accuracy))
+
+# Find best tuning parameters
+bestTune_nn <- CV_results_nn %>%
+  select_best("accuracy")
+
+# Finalize workflow and predict
+final_wf_nn <- 
+  nn_wf %>%
+  finalize_workflow(bestTune_nn) %>%
+  fit(data = ggg.train)
+
+# predict
+ggg_nn_predictions <- predict(final_wf_nn,
+                              new_data = ggg.test,
+                              type = "class") %>%
+  bind_cols(., ggg.test) %>% #Bind predictions with test data
+  select(id, .pred_class) %>% #Just keep id and pred_1
+  rename(type=.pred_class) #rename pred1 to type (for submission to Kaggle)
+
+vroom_write(x=ggg_nn_predictions, file="./GGGNNPreds.csv", delim=",")
+
+  
