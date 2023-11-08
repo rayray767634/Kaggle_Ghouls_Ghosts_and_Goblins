@@ -11,6 +11,9 @@ library(naivebayes)
 library(kknn)
 library(kernlab)
 library(themis)
+library(bonsai)
+library(lightgbm)
+library(dbarts)
 
 missingtrain <- vroom("trainWithMissingValues.csv")%>% 
   mutate_at('id', as.character) %>%
@@ -142,4 +145,53 @@ ggg_nn_predictions <- predict(final_wf_nn,
 
 vroom_write(x=ggg_nn_predictions, file="./GGGNNPreds.csv", delim=",")
 
-  
+
+
+# boost and bart
+
+boost_model <- boost_tree(tree_depth = tune(),
+                          trees = tune(),
+                          learn_rate = tune()) %>%
+  set_engine("lightgbm") %>% # or "xgboost" but lightgbm is faster
+  set_mode("classification")
+
+bart_model <- parsnip::bart(trees=tune()) %>% # BART figures out depth and learn_rate
+  set_engine("dbarts") %>%
+  set_mode("classification")
+
+
+boost_wf <- workflow() %>%
+  add_recipe(nn_recipe) %>%
+  add_model(boost_model)
+
+boost_tuneGrid <- grid_regular(tree_depth(),
+                               trees(),
+                               learn_rate(),
+                               levels = 5)
+folds <- vfold_cv(ggg.train, v = 5, repeats = 1)
+
+
+CV_results_boost <-boost_wf  %>%
+  tune_grid(resamples = folds,
+            grid = boost_tuneGrid,
+            metrics = metric_set(accuracy))
+
+# Find best tuning parameters
+bestTune_boost <- CV_results_boost %>%
+  select_best("accuracy")
+
+# Finalize workflow and predict
+final_wf_boost <- 
+  boost_wf %>%
+  finalize_workflow(bestTune_boost) %>%
+  fit(data = ggg.train)
+
+# predict
+ggg_boost_predictions <- predict(final_wf_boost,
+                                 new_data = ggg.test,
+                                 type = "class") %>%
+  bind_cols(., ggg.test) %>% #Bind predictions with test data
+  select(id, .pred_class) %>% #Just keep id and pred_1
+  rename(type=.pred_class) #rename pred1 to type (for submission to Kaggle)
+
+vroom_write(x=ggg_boost_predictions, file="./GGGBOOSTPreds.csv", delim=",")
